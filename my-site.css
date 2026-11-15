@@ -53,9 +53,25 @@ body {
   will-change: transform;
 }
 
-.layeredText span {
+/* Tiap huruf adalah blok 3D sendiri, supaya bisa berhamburan saat di-tap */
+.layeredText .char {
+  display: inline-block;
+  position: relative;
+}
+
+.layeredText .glyph {
   color: transparent;
   text-shadow: 0 0 0.1em #003;
+}
+
+/* Teks utuh untuk screen reader, tidak terlihat */
+.layeredText .sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 .layeredText .layers,

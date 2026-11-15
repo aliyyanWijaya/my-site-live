@@ -4,30 +4,46 @@ const layeredElements = document.querySelectorAll('.layeredText');
 layeredElements.forEach(generateLayers);
 layeredElements.forEach(makeInteractive);
 
+function escapeHtml(text) {
+  return text.replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[c]);
+}
+
+/**
+ * Pecah teks per huruf. Tiap huruf punya tumpukan layer 3D sendiri,
+ * supaya bisa berhamburan sendiri-sendiri tapi tetap terlihat tebal.
+ */
 function generateLayers(element) {
   if (element.querySelector('.layers')) return;
 
-  const layersCount = element.dataset.layers || DEFAULT_LAYERS_COUNT;
+  const layersCount = Number(element.dataset.layers) || DEFAULT_LAYERS_COUNT;
   element.style.setProperty('--layers-count', layersCount);
 
-  const content = element.textContent;
+  const content = element.textContent.trim();
+  const layerNumbers = Array.from({ length: layersCount }, (_, i) => i + 1);
 
-  element.innerHTML = `
-    <span>${content}</span>
-    <div class="layers" aria-hidden="true">
-      ${Array.from({ length: layersCount }, (_, i) =>
-        `<div class="layer" style="--i: ${i + 1};">${content}</div>`
-      ).join('')}
-    </div>
-  `;
+  const chars = Array.from(content).map((ch) => {
+    if (ch === ' ') return '<span class="char space" aria-hidden="true">&nbsp;</span>';
+    const glyph = escapeHtml(ch);
+    return `<span class="char" aria-hidden="true">` +
+      `<span class="glyph">${glyph}</span>` +
+      `<span class="layers">${layerNumbers.map((i) =>
+        `<span class="layer" style="--i: ${i};">${glyph}</span>`
+      ).join('')}</span>` +
+    `</span>`;
+  }).join('');
+
+  // Teks utuh untuk screen reader; huruf-huruf visualnya disembunyikan.
+  element.innerHTML = `<span class="sr-only">${escapeHtml(content)}</span>${chars}`;
 }
 
 /**
  * Interaksi teks 3D:
  * - Drag (mouse / jari) untuk memutar bebas, bisa 360° ke segala arah.
  * - Dilepas saat masih bergerak: terus berputar (inersia), lalu pelan-pelan
- *   kembali menghadap depan dengan sedikit goyangan.
- * - Tap / klik: teks bergoyang seperti jeli.
+ *   kembali menghadap depan.
+ * - Tap / klik: huruf-huruf berhamburan, lalu memantul kembali ke tempatnya.
  * - Mouse di desktop: teks sedikit miring mengikuti kursor.
  */
 function makeInteractive(el) {
@@ -42,21 +58,80 @@ function makeInteractive(el) {
   const TAP_MAX_MOVE = 6;    // px; lebih dari ini dianggap drag, bukan tap
   const TAP_MAX_TIME = 350;  // ms
 
+  // Huruf berhamburan: pegas yang menarik tiap huruf kembali ke tempatnya.
+  const SCATTER_POWER = 0.35; // kekuatan lemparan (dikali ukuran font)
+  const SCATTER_SPIN = 20;    // putaran acak tiap huruf (derajat per frame)
+  const LETTER_SPRING = 0.05; // makin besar, makin cepat kembali
+  const LETTER_DAMPING = 0.88; // makin kecil, makin sedikit memantul
+
   let rotX = 0, rotY = 0, velX = 0, velY = 0;
   let tiltX = 0, tiltY = 0, targetTiltX = 0, targetTiltY = 0;
-  let wobble = 0, wobbleVel = 0;
   let drag = null;
   let rafId = 0;
   let lastTime = 0;
+
+  // Posisi tiap huruf: [x, y, z, rotX, rotY, rotZ] + kecepatannya.
+  const letters = Array.from(el.querySelectorAll('.char:not(.space)')).map(
+    (node) => ({ node, p: [0, 0, 0, 0, 0, 0], v: [0, 0, 0, 0, 0, 0], moving: false })
+  );
 
   function nearestTurn(deg) {
     return Math.round(deg / 360) * 360;
   }
 
+  function random(min, max) {
+    return min + Math.random() * (max - min);
+  }
+
+  function scatter() {
+    const fontSize = parseFloat(getComputedStyle(el).fontSize);
+    const width = el.offsetWidth || 1;
+    letters.forEach((letter) => {
+      // -1 (paling kiri) .. 1 (paling kanan): huruf terlempar menjauhi tengah.
+      const fromCenter =
+        (letter.node.offsetLeft + letter.node.offsetWidth / 2) / width * 2 - 1;
+      const power = fontSize * SCATTER_POWER * random(0.7, 1.3);
+      letter.v[0] += (fromCenter + random(-0.5, 0.5)) * power;
+      letter.v[1] += random(-1, 0.6) * power; // lebih sering ke atas
+      letter.v[2] += random(-0.6, 1.2) * power; // lebih sering ke arah layar
+      letter.v[3] += random(-SCATTER_SPIN, SCATTER_SPIN);
+      letter.v[4] += random(-SCATTER_SPIN, SCATTER_SPIN);
+      letter.v[5] += random(-SCATTER_SPIN, SCATTER_SPIN) * 1.3;
+      letter.moving = true;
+    });
+  }
+
+  function updateLetters(dt) {
+    const damping = Math.pow(LETTER_DAMPING, dt);
+    let anyMoving = false;
+    letters.forEach((letter) => {
+      if (!letter.moving) return;
+      const { p, v } = letter;
+      let energy = 0;
+      for (let i = 0; i < 6; i++) {
+        v[i] += -LETTER_SPRING * p[i] * dt;
+        v[i] *= damping;
+        p[i] += v[i] * dt;
+        energy += Math.abs(p[i]) + Math.abs(v[i]);
+      }
+      if (energy < 0.05) {
+        p.fill(0);
+        v.fill(0);
+        letter.moving = false;
+        letter.node.style.transform = '';
+        return;
+      }
+      anyMoving = true;
+      letter.node.style.transform =
+        `translate3d(${p[0]}px, ${p[1]}px, ${p[2]}px) ` +
+        `rotateX(${p[3]}deg) rotateY(${p[4]}deg) rotateZ(${p[5]}deg)`;
+    });
+    return anyMoving;
+  }
+
   function render() {
     el.style.transform =
-      `rotateX(${rotX + tiltX}deg) rotateY(${rotY + tiltY}deg) ` +
-      `rotateZ(${wobble * 6}deg) scale(${1 + wobble * 0.06})`;
+      `rotateX(${rotX + tiltX}deg) rotateY(${rotY + tiltY}deg)`;
   }
 
   function frame(now) {
@@ -80,23 +155,18 @@ function makeInteractive(el) {
     tiltX += (targetTiltX - tiltX) * Math.min(0.1 * dt, 1);
     tiltY += (targetTiltY - tiltY) * Math.min(0.1 * dt, 1);
 
-    wobbleVel += -0.15 * wobble * dt;
-    wobbleVel *= Math.pow(0.88, dt);
-    wobble += wobbleVel * dt;
-
+    const lettersMoving = updateLetters(dt);
     render();
 
-    const atRest = !drag &&
+    const atRest = !drag && !lettersMoving &&
       Math.abs(velX) + Math.abs(velY) < 0.01 &&
       Math.abs(nearestTurn(rotX) - rotX) < 0.05 &&
       Math.abs(nearestTurn(rotY) - rotY) < 0.05 &&
-      Math.abs(targetTiltX - tiltX) + Math.abs(targetTiltY - tiltY) < 0.05 &&
-      Math.abs(wobble) + Math.abs(wobbleVel) < 0.001;
+      Math.abs(targetTiltX - tiltX) + Math.abs(targetTiltY - tiltY) < 0.05;
 
     if (atRest) {
       // Normalisasi supaya angka tidak membesar terus setelah banyak putaran.
       rotX = 0; rotY = 0; velX = 0; velY = 0;
-      wobble = 0; wobbleVel = 0;
       render();
       rafId = 0;
     } else {
@@ -160,7 +230,7 @@ function makeInteractive(el) {
       velY = 0;
     }
     if (isTap && !reduceMotion) {
-      wobbleVel += 0.6;
+      scatter();
     }
     drag = null;
     area.classList.remove('dragging');
