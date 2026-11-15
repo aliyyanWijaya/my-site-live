@@ -7,10 +7,6 @@
 }
 
 body {
-  /* Posisi awal di tengah, agar efek 3D sudah aktif sebelum mouse/jari bergerak */
-  --nx: 0.5;
-  --ny: 0.5;
-
   font-family: Montserrat, sans-serif;
   background-color: #555;
   color: #fff;
@@ -25,6 +21,18 @@ body {
 /* Ditulis tanpa CSS nesting agar jalan di browser lama juga */
 .scene {
   perspective: 700px;
+  /* Area pegang lebih besar dari teksnya, supaya mudah di-tap di phone */
+  padding: 6vh 4vw;
+  cursor: grab;
+  /* Drag di area teks memutar teks, bukan scroll/zoom halaman */
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.scene.dragging {
+  cursor: grabbing;
 }
 
 .scene * {
@@ -41,9 +49,8 @@ body {
   --text-height: 0.5em;
 
   position: relative;
-  transform:
-    rotateX(calc(var(--ny) * 30deg - 15deg))
-    rotateY(calc(var(--nx) * 30deg - 15deg));
+  /* transform diatur oleh my-site.js (drag, putar 360°, goyang) */
+  will-change: transform;
 }
 
 .layeredText span {

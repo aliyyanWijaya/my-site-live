@@ -2,10 +2,11 @@ const DEFAULT_LAYERS_COUNT = 24;
 
 const layeredElements = document.querySelectorAll('.layeredText');
 layeredElements.forEach(generateLayers);
+layeredElements.forEach(makeInteractive);
 
 function generateLayers(element) {
   if (element.querySelector('.layers')) return;
-  
+
   const layersCount = element.dataset.layers || DEFAULT_LAYERS_COUNT;
   element.style.setProperty('--layers-count', layersCount);
 
@@ -21,18 +22,163 @@ function generateLayers(element) {
   `;
 }
 
-function updateTilt(x, y) {
-  document.body.style.setProperty('--nx', x / window.innerWidth);
-  document.body.style.setProperty('--ny', y / window.innerHeight);
+/**
+ * Interaksi teks 3D:
+ * - Drag (mouse / jari) untuk memutar bebas, bisa 360° ke segala arah.
+ * - Dilepas saat masih bergerak: terus berputar (inersia), lalu pelan-pelan
+ *   kembali menghadap depan dengan sedikit goyangan.
+ * - Tap / klik: teks bergoyang seperti jeli.
+ * - Mouse di desktop: teks sedikit miring mengikuti kursor.
+ */
+function makeInteractive(el) {
+  const area = el.closest('.scene') || el;
+  const reduceMotion =
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  const DRAG_SPEED = 0.5;    // derajat putaran per pixel drag
+  const FRICTION = 0.95;     // perlambatan inersia per frame (60fps)
+  const HOME_SPRING = 0.004; // tarikan kembali ke posisi menghadap depan
+  const HOVER_TILT = 15;     // kemiringan maksimum mengikuti mouse (derajat)
+  const TAP_MAX_MOVE = 6;    // px; lebih dari ini dianggap drag, bukan tap
+  const TAP_MAX_TIME = 350;  // ms
+
+  let rotX = 0, rotY = 0, velX = 0, velY = 0;
+  let tiltX = 0, tiltY = 0, targetTiltX = 0, targetTiltY = 0;
+  let wobble = 0, wobbleVel = 0;
+  let drag = null;
+  let rafId = 0;
+  let lastTime = 0;
+
+  function nearestTurn(deg) {
+    return Math.round(deg / 360) * 360;
+  }
+
+  function render() {
+    el.style.transform =
+      `rotateX(${rotX + tiltX}deg) rotateY(${rotY + tiltY}deg) ` +
+      `rotateZ(${wobble * 6}deg) scale(${1 + wobble * 0.06})`;
+  }
+
+  function frame(now) {
+    // dt = jumlah "frame 60fps" sejak frame sebelumnya, agar kecepatan sama
+    // di layar 60Hz maupun 120Hz.
+    const dt = Math.min((now - lastTime) / 16.667, 3);
+    lastTime = now;
+
+    if (!drag) {
+      // Pegas ke kelipatan 360° terdekat + gesekan: saat berputar cepat pegas
+      // nyaris tidak terasa, saat melambat teks berhenti menghadap depan.
+      velX += (nearestTurn(rotX) - rotX) * HOME_SPRING * dt;
+      velY += (nearestTurn(rotY) - rotY) * HOME_SPRING * dt;
+      const f = Math.pow(FRICTION, dt);
+      velX *= f;
+      velY *= f;
+      rotX += velX * dt;
+      rotY += velY * dt;
+    }
+
+    tiltX += (targetTiltX - tiltX) * Math.min(0.1 * dt, 1);
+    tiltY += (targetTiltY - tiltY) * Math.min(0.1 * dt, 1);
+
+    wobbleVel += -0.15 * wobble * dt;
+    wobbleVel *= Math.pow(0.88, dt);
+    wobble += wobbleVel * dt;
+
+    render();
+
+    const atRest = !drag &&
+      Math.abs(velX) + Math.abs(velY) < 0.01 &&
+      Math.abs(nearestTurn(rotX) - rotX) < 0.05 &&
+      Math.abs(nearestTurn(rotY) - rotY) < 0.05 &&
+      Math.abs(targetTiltX - tiltX) + Math.abs(targetTiltY - tiltY) < 0.05 &&
+      Math.abs(wobble) + Math.abs(wobbleVel) < 0.001;
+
+    if (atRest) {
+      // Normalisasi supaya angka tidak membesar terus setelah banyak putaran.
+      rotX = 0; rotY = 0; velX = 0; velY = 0;
+      wobble = 0; wobbleVel = 0;
+      render();
+      rafId = 0;
+    } else {
+      rafId = requestAnimationFrame(frame);
+    }
+  }
+
+  function wake() {
+    if (!rafId) {
+      lastTime = performance.now();
+      rafId = requestAnimationFrame(frame);
+    }
+  }
+
+  area.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    // Mencegah mousedown "bawaan" ikut terkirim, supaya game dino tidak
+    // ikut mulai/lompat saat teks di-drag atau di-tap.
+    e.preventDefault();
+    try { area.setPointerCapture(e.pointerId); } catch (err) {}
+    const now = performance.now();
+    drag = {
+      id: e.pointerId,
+      startX: e.clientX, startY: e.clientY,
+      x: e.clientX, y: e.clientY,
+      startTime: now, lastMoveTime: now,
+    };
+    velX = 0;
+    velY = 0;
+    area.classList.add('dragging');
+    wake();
+  });
+
+  area.addEventListener('pointermove', (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const now = performance.now();
+    const dx = e.clientX - drag.x;
+    const dy = e.clientY - drag.y;
+    const frames = Math.max((now - drag.lastMoveTime) / 16.667, 0.5);
+    // Drag ke bawah: bagian atas mendekat; drag ke kanan: sisi kiri mendekat.
+    rotX -= dy * DRAG_SPEED;
+    rotY += dx * DRAG_SPEED;
+    // Kecepatan dihaluskan, dipakai untuk inersia saat dilepas.
+    velX = velX * 0.5 + (-dy * DRAG_SPEED / frames) * 0.5;
+    velY = velY * 0.5 + (dx * DRAG_SPEED / frames) * 0.5;
+    drag.x = e.clientX;
+    drag.y = e.clientY;
+    drag.lastMoveTime = now;
+    wake();
+  });
+
+  function endDrag(e) {
+    if (!drag || e.pointerId !== drag.id) return;
+    const now = performance.now();
+    const moved = Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY);
+    const isTap = moved < TAP_MAX_MOVE && now - drag.startTime < TAP_MAX_TIME;
+
+    // Kalau jari/mouse sempat diam sebelum dilepas, jangan lanjut berputar.
+    if (now - drag.lastMoveTime > 80 || reduceMotion) {
+      velX = 0;
+      velY = 0;
+    }
+    if (isTap && !reduceMotion) {
+      wobbleVel += 0.6;
+    }
+    drag = null;
+    area.classList.remove('dragging');
+    wake();
+  }
+
+  area.addEventListener('pointerup', endDrag);
+  area.addEventListener('pointercancel', endDrag);
+
+  // Desktop: sedikit miring mengikuti kursor mouse di mana pun di halaman.
+  if (!reduceMotion) {
+    window.addEventListener('pointermove', (e) => {
+      if (e.pointerType !== 'mouse' || drag) return;
+      targetTiltX = (e.clientY / window.innerHeight - 0.5) * 2 * HOVER_TILT;
+      targetTiltY = (e.clientX / window.innerWidth - 0.5) * 2 * HOVER_TILT;
+      wake();
+    });
+  }
+
+  render();
 }
-
-// Desktop: ikuti mouse
-window.addEventListener('mousemove', (e) => updateTilt(e.clientX, e.clientY));
-
-// Phone/tablet: ikuti jari (passive, jadi tidak mengganggu scroll atau game)
-['touchstart', 'touchmove'].forEach((type) => {
-  window.addEventListener(type, (e) => {
-    const t = e.touches[0];
-    if (t) updateTilt(t.clientX, t.clientY);
-  }, { passive: true });
-});
