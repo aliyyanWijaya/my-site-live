@@ -460,16 +460,11 @@
     deltaTime = !this.started ? 0 : deltaTime;
     this.horizon.update(deltaTime, this.currentSpeed, hasObstacles);
     }
-    // Check for collisions.
-    var collision = hasObstacles &&
-    checkForCollision(this.horizon.obstacles[0], this.tRex);
-    if (!collision) {
+    // Mode santai: dino kebal, menabrak kaktus/burung tidak mengakhiri game,
+    // jadi tabrakan sengaja tidak dicek dan dino jalan terus.
     this.distanceRan += this.currentSpeed * deltaTime / this.msPerFrame;
     if (this.currentSpeed < this.config.MAX_SPEED) {
     this.currentSpeed += this.config.ACCELERATION;
-    }
-    } else {
-    this.gameOver();
     }
     if (this.distanceMeter.getActualDistance(this.distanceRan) >
     this.distanceMeter.maxScore) {
