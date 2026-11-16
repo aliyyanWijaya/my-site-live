@@ -555,8 +555,12 @@
     this.tRex.startJump();
     }
     }
+    // Di mobile, overlay .controller menutupi seluruh layar (termasuk tombol
+    // restart), jadi tap di mana pun setelah game over harus bisa restart.
+    // Jeda GAMEOVER_CLEAR_TIME mencegah tap lompat yang telat langsung restart.
     if (this.crashed && e.type == Runner.events.TOUCHSTART &&
-    e.currentTarget == this.containerEl) {
+    getTimeStamp() - this.time >= this.config.GAMEOVER_CLEAR_TIME) {
+    e.preventDefault();
     this.restart();
     }
     }
